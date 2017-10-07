@@ -395,7 +395,9 @@ class Dashboard(gdb.Command):
         # enable and display if possible (program running)
         dashboard.enable()
         dashboard.redisplay()
-
+        run('dashboard assembly -style opcodes True'); 
+        run('dashboard -layout source assembly memory stackmemory registers');
+        
     @staticmethod
     def get_term_width(fd=1):  # defaults to the main terminal
         # first 2 shorts (4 byte) of struct winsize
@@ -960,13 +962,13 @@ instructions constituting the current statement are marked, if available."""
         return {
             'context': {
                 'doc': 'Number of context instructions.',
-                'default': 3,
+                'default': 5,
                 'type': int,
                 'check': check_ge_zero
             },
             'opcodes': {
                 'doc': 'Opcodes visibility flag.',
-                'default': False,
+                'default': True,
                 'name': 'show_opcodes',
                 'type': bool
             },
@@ -1083,12 +1085,8 @@ location, if available. Optionally list the frame arguments and locals too."""
         if frame.name():
             frame_name = ansi(frame.name(), style)
             try:
-                # try to compute the offset relative to the current function (it
-                # may happen that the frame name is the whole function
-                # declaration, instead of just the name, e.g., 'getkey()', so it
-                # would be treated as a function call by 'gdb.parse_and_eval',
-                # hence the trim, see #87 and #88)
-                value = gdb.parse_and_eval(frame.name().split('(')[0]).address
+                # try to compute the offset relative to the current function
+                value = gdb.parse_and_eval(frame.name()).address
                 # it can be None even if it is part of the "stack" (C++)
                 if value:
                     func_start = to_unsigned(value)
@@ -1260,6 +1258,123 @@ class Memory(Dashboard.Module):
             }
         }
 
+  
+class StackMemory(Dashboard.Module):
+    """Allow to inspect Stackmemory regions."""
+
+    @staticmethod
+    def format_byte(byte):
+        # `type(byte) is bytes` in Python 3
+        if byte.isspace():
+            return ' '
+        elif 0x20 < ord(byte) < 0x7e:
+            return chr(ord(byte))
+        else:
+            return '.'
+
+    @staticmethod
+    def parse_as_address(expression):
+        value = gdb.parse_and_eval(expression)
+        return to_unsigned(value)
+
+    def __init__(self):
+        self.row_length = 4
+        self.table = {}
+
+    def format_stack_memory(self, start, memory):
+        out = []
+        for i in range(len(memory) - self.row_length, -self.row_length, -self.row_length):
+            region = memory[i + self.row_length-1:i-1:-1]
+            value = 0
+            for byte in region:
+                value = value * 256 + ord(byte)
+            pad = self.row_length - len(region)
+            address = format_address(start + i)
+            ebp = to_unsigned( gdb.parse_and_eval('$ebp'))
+            esp = to_unsigned( gdb.parse_and_eval('$esp'))
+            ebpr = 'EBP{:+02d}'.format((-ebp + start + i))
+            hexa = '{:08x}'.format(value)
+            if esp == start + i:
+                text = '  <-- ESP'
+            else:
+                text = ''
+            if start + i < esp:
+                style_ebp = R.style_low
+            else:
+                style_ebp = R.style_high
+            if i == 0:
+                out.append('{}'.format(ansi(address, R.style_low)))
+            else:
+                out.append('{} {} {}{}'.format(ansi(address, R.style_low),
+                                               hexa,
+                                               ansi(ebpr, style_ebp),
+                                               ansi(text, R.style_high)))
+        return out
+
+    def label(self):
+        return 'StackMemory'
+
+    def lines(self, term_width, style_changed):
+        out = []
+        inferior = gdb.selected_inferior()
+        for address, length in sorted(self.table.items()):
+            try:
+                memory = inferior.read_memory(address, length)
+                out.extend(self.format_stack_memory(address, memory))
+            except gdb.error:
+                msg = 'Cannot access {} bytes starting at {}'
+                msg = msg.format(length, format_address(address))
+                out.append(ansi(msg, R.style_error))
+            out.append(divider(term_width))
+        # drop last divider
+        if out:
+            del out[-1]
+        return out
+
+    def watch(self, arg):
+        if arg:
+            address, _, length = arg.partition(' ')
+            address = Memory.parse_as_address(address)
+            if length:
+                length = Memory.parse_as_address(length)
+            else:
+                length = self.row_length
+            self.table[address] = length
+        else:
+            raise Exception('Specify an address')
+
+    def unwatch(self, arg):
+        if arg:
+            try:
+                del self.table[Memory.parse_as_address(arg)]
+            except KeyError:
+                raise Exception('Memory region not watched')
+        else:
+            raise Exception('Specify an address')
+
+    def clear(self, arg):
+        self.table.clear()
+
+    def commands(self):
+        return {
+            'watch': {
+                'action': self.watch,
+                'doc': 'Watch a memory region by address and length.\n'
+                       'The length defaults to 16 byte.',
+                'complete': gdb.COMPLETE_EXPRESSION
+            },
+            'unwatch': {
+                'action': self.unwatch,
+                'doc': 'Stop watching a memory region by address.',
+                'complete': gdb.COMPLETE_EXPRESSION
+            },
+            'clear': {
+                'action': self.clear,
+                'doc': 'Clear all the watched regions.'
+            }
+        }
+
+    
 class Registers(Dashboard.Module):
     """Show the CPU registers and their values."""
 
