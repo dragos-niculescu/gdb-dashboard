@@ -216,6 +216,12 @@ from GDB.
 
 There are two additional predefined subcommands: `-style` and `-output`.
 
+#### memory dump 
+dashboard memory watch $ebp-20 40
+
+#### stack dump 
+dashboard stackmemory watch $ebp-20 40
+
 #### -style
 
 If a module declares some stylable attributes then the command `dashboard
