@@ -1293,7 +1293,7 @@ class StackMemory(Dashboard.Module):
             ebp = to_unsigned( gdb.parse_and_eval('$ebp'))
             esp = to_unsigned( gdb.parse_and_eval('$esp'))
             ebpr = 'EBP{:+02d}'.format((-ebp + start + i))
-            hexa = '{:08x}'.format(value)
+            hexa = ('{:0' + str(2*self.row_length) + 'x}').format(value)
             if esp == start + i:
                 text = '  <-- ESP'
             else:
@@ -1319,8 +1319,8 @@ class StackMemory(Dashboard.Module):
         inferior = gdb.selected_inferior()
         for address, length in sorted(self.table.items()):
             try:
-                length = length & (~3)
-                address = address & (~3)
+                length = length & (~(self.row_length - 1))
+                address = address & (~(self.row_length - 1))
                 memory = inferior.read_memory(address, length)
                 out.extend(self.format_stack_memory(address, memory))
             except gdb.error:
@@ -1335,15 +1335,22 @@ class StackMemory(Dashboard.Module):
 
     def watch(self, arg):
         if arg:
-            address, _, length = arg.partition(' ')
-            address = Memory.parse_as_address(address)
-            if length:
-                length = Memory.parse_as_address(length)
+#            [address, length, row_length] = arg.split()
+            args = arg.split()
+            if len(args) > 0:
+                address = Memory.parse_as_address(args[0])
+            if len(args) > 1:
+                 self.table[address] = Memory.parse_as_address(args[1])
             else:
-                length = self.row_length
-            self.table[address] = length
+                 self.table[address] = 16
+            if len(args) > 2:
+                self.row_length = Memory.parse_as_address(args[2])
+                if self.row_length not in [2, 4, 8, 16]:
+                    raise Exception('row_length can only be 2, 4, 8, 16')
+            else:
+                self.row_length = 4
         else:
-            raise Exception('Specify an address')
+            raise Exception('Specify address, length, row_length')
 
     def unwatch(self, arg):
         if arg:
@@ -1361,8 +1368,9 @@ class StackMemory(Dashboard.Module):
         return {
             'watch': {
                 'action': self.watch,
-                'doc': 'Watch a memory region by address and length.\n'
-                       'The length defaults to 16 byte.',
+                'doc': 'Watch a stack region by address, length, row_length.\n'
+                       'The length defaults to 16 bytes.'
+                       'The row_length defaults to 4 bytes.',
                 'complete': gdb.COMPLETE_EXPRESSION
             },
             'unwatch': {
